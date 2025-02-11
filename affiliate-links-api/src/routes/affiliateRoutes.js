@@ -6,20 +6,42 @@ const { getSession } = require('../db/neo4j');
 router.post('/', async (req, res) => {
     const session = getSession();
     try {
-        const { originalUrl, affiliateUrl, merchant, category } = req.body;
-        
+        const { affiliateUrl, tags, comment } = req.body;
+
+        // Check if affiliate link with these tags already exists
+        const existingLinkResult = await session.run(
+            `
+            MATCH (a:AffiliateLink)
+            WHERE a.affiliateUrl = $affiliateUrl OR 
+                  all(tag IN $tags WHERE tag IN a.tags)
+            RETURN a
+            `,
+            { affiliateUrl, tags }
+        );
+
+        if (existingLinkResult.records.length > 0) {
+            return res.status(409).json({
+                error: 'Affiliate link or the given tags already exists',
+                existingLink: existingLinkResult.records[0].get('a').properties
+            });
+        }
+
+        const sharedUrl = affiliateUrl; // TODO: add more logic to generate sharedUrl
+        const merchant = "amazon"; // TODO: add more logic to generate merchant
+
         const result = await session.run(
             `
             CREATE (a:AffiliateLink {
-                originalUrl: $originalUrl,
+                sharedUrl: $sharedUrl,
                 affiliateUrl: $affiliateUrl,
                 merchant: $merchant,
-                category: $category,
+                tags: $tags,
+                comment: $comment,
                 createdAt: datetime()
             })
             RETURN a
             `,
-            { originalUrl, affiliateUrl, merchant, category }
+            { sharedUrl, affiliateUrl, merchant, tags, comment }
         );
         
         res.status(201).json(result.records[0].get('a').properties);
@@ -34,19 +56,13 @@ router.post('/', async (req, res) => {
 router.get('/', async (req, res) => {
     const session = getSession();
     try {
-        const { merchant, category } = req.query;
+        const { tags } = req.query;
         let query = 'MATCH (a:AffiliateLink)';
         const params = {};
 
-        if (merchant) {
-            query += ' WHERE a.merchant = $merchant';
-            params.merchant = merchant;
-        }
-        
-        if (category) {
-            query += merchant ? ' AND' : ' WHERE';
-            query += ' a.category = $category';
-            params.category = category;
+        if (tags && tags.length > 0) {
+            query += ' WHERE any(tag IN a.tags WHERE tag IN $tags)';
+            params.tags = tags;
         }
 
         query += ' RETURN a ORDER BY a.createdAt DESC';
